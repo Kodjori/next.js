@@ -1,7 +1,6 @@
 use anyhow::{Result, bail};
 use turbo_rcstr::{RcStr, rcstr};
 use turbo_tasks::{ResolvedVc, ValueToString, Vc};
-use turbopack::css::chunk::CssChunkPlaceable;
 use turbopack_core::{
     asset::{Asset, AssetContent},
     chunk::{ChunkGroupType, ChunkableModuleReference, ChunkingType, ChunkingTypeOption},
@@ -10,6 +9,7 @@ use turbopack_core::{
     reference::{ModuleReference, ModuleReferences},
     resolve::ModuleResolveResult,
 };
+use turbopack_css::chunk::CssChunkPlaceable;
 
 /// A [`CssClientReferenceModule`] is a marker module used to indicate which
 /// client reference should appear in the client reference manifest.
