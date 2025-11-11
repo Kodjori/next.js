@@ -943,5 +943,15 @@
   "942": "Unexpected stream chunk while in Before stage",
   "943": "getFlightStream should always receive a ReadableStream when using the edge runtime",
   "944": "nodeStreamFromReadableStream cannot be used in the edge runtime",
-  "945": "createNodeStreamFromChunks cannot be used in the edge runtime"
+  "945": "createNodeStreamFromChunks cannot be used in the edge runtime",
+  "946": "install() was not called",
+  "947": "The \"callback\" argument must be of type function. Received %s",
+  "948": "Cannot start capturing immediates again without finishing the previous task (state: %s)",
+  "949": "performWork can only be called while waiting (state: %s)",
+  "950": "Cannot stop capturing immediates before execution is finished (state: %s)",
+  "951": "Expected all captured immediates to have been executed (state: %s)",
+  "952": "scheduleWorkAfterTicksAndMicrotasks can only be called while waiting (state: %s)",
+  "953": "Fast setImmediate is not available in the edge runtime.",
+  "954": "An unexpected error occurred while executing immediates",
+  "955": "An unexpected error occurred while starting to capture immediates"
 }
