@@ -814,30 +814,37 @@ describe('uncaught errors in setImmediate do not affect surrounding tasks or oth
     const { log, logs } = createLogger()
     const done = createPromiseWithResolvers<void>()
 
+    const Ctx = new AsyncLocalStorage<string>()
+    const contextValue = 'hello'
+
     let triggeredError: TriggeredUncaught | undefined = undefined
     using _ = trackUncaughtErrors((error, kind) => {
-      log(kind)
+      log(`${kind} - ${Ctx.getStore()}`)
       triggeredError = { error, kind }
     })
 
     const error = new Error('kaboom')
 
-    setTimeout(() => {
-      DANGEROUSLY_runPendingImmediatesAfterCurrentTask()
-      log('timeout 1')
-      setImmediate(() => {
-        log('timeout 1 -> immediate 1')
+    Ctx.run(contextValue, () => {
+      setTimeout(() => {
+        DANGEROUSLY_runPendingImmediatesAfterCurrentTask()
+        log('timeout 1')
 
-        // In the patch, we rethrow the synchronous error asynchronously,
-        // so unfortunately ticks will run before uncaughtException.
-        process.nextTick(() => {
-          log('timeout 1 -> immediate 1 -> nextTick')
+        setImmediate(() => {
+          log('timeout 1 -> immediate 1')
+
+          // In the patch, we rethrow the synchronous error asynchronously,
+          // so unfortunately ticks will run before uncaughtException.
+          process.nextTick(() => {
+            log('timeout 1 -> immediate 1 -> nextTick')
+          })
+
+          throw error
         })
 
-        throw error
-      })
-      setImmediate(() => {
-        log('timeout 1 -> immediate 2')
+        setImmediate(() => {
+          log('timeout 1 -> immediate 2')
+        })
       })
     })
 
@@ -861,8 +868,12 @@ describe('uncaught errors in setImmediate do not affect surrounding tasks or oth
       'timeout 1',
       // ======================
       'timeout 1 -> immediate 1',
-      'timeout 1 -> immediate 1 -> nextTick', // undesirable
-      'uncaughtException',
+      'timeout 1 -> immediate 1 -> nextTick', // undesirable (too early) but acceptable
+
+      // FIXME: no async context in uncaughtException
+      // `uncaughtException - ${contextValue}`,
+      `uncaughtException - undefined`,
+
       // ======================
       'timeout 1 -> immediate 2',
       // ===================================
@@ -874,26 +885,32 @@ describe('uncaught errors in setImmediate do not affect surrounding tasks or oth
     const { log, logs } = createLogger()
     const done = createPromiseWithResolvers<void>()
 
+    const Ctx = new AsyncLocalStorage<string>()
+    const contextValue = 'hello'
+
     let triggeredError: TriggeredUncaught | undefined = undefined
     using _ = trackUncaughtErrors((error, kind) => {
-      log(kind)
+      // Ideally, we can read the async context in an uncaughtException handler
+      log(`${kind} - ${Ctx.getStore()}`)
       triggeredError = { error, kind }
     })
 
     const error = new Error('kaboom')
 
-    setTimeout(() => {
-      DANGEROUSLY_runPendingImmediatesAfterCurrentTask()
-      log('timeout 1')
-      setImmediate(() => {
-        log('timeout 1 -> immediate 1')
-        process.nextTick(() => {
-          log('timeout 1 -> immediate 1 -> nextTick')
-          throw error
+    Ctx.run(contextValue, () => {
+      setTimeout(() => {
+        DANGEROUSLY_runPendingImmediatesAfterCurrentTask()
+        log('timeout 1')
+        setImmediate(() => {
+          log('timeout 1 -> immediate 1')
+          process.nextTick(() => {
+            log(`timeout 1 -> immediate 1 -> nextTick - ${Ctx.getStore()}`)
+            throw error
+          })
         })
-      })
-      setImmediate(() => {
-        log('timeout 1 -> immediate 2')
+        setImmediate(() => {
+          log('timeout 1 -> immediate 2')
+        })
       })
     })
 
@@ -917,8 +934,12 @@ describe('uncaught errors in setImmediate do not affect surrounding tasks or oth
       'timeout 1',
       // ======================
       'timeout 1 -> immediate 1',
-      'timeout 1 -> immediate 1 -> nextTick',
-      'uncaughtException',
+      `timeout 1 -> immediate 1 -> nextTick - ${contextValue}`,
+
+      // FIXME: no async context in uncaughtException
+      // `uncaughtException - ${contextValue}`,
+      `uncaughtException - undefined`,
+
       // ======================
       'timeout 1 -> immediate 2',
       // ===================================
