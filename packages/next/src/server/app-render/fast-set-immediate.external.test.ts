@@ -1003,81 +1003,124 @@ describe('uncaught errors in setImmediate do not affect surrounding tasks or oth
     ])
   })
 
-  it('unhandled rejection', async () => {
-    const { log, logs } = createLogger()
-    const done = createPromiseWithResolvers<void>()
+  describe('unhandled rejections', () => {
+    type Case = {
+      name: string
+      immediate: (
+        name: string,
+        error: Error,
+        log: (...args: any[]) => void
+      ) => void
+    }
 
-    let triggeredError: TriggeredUncaught | undefined = undefined
-    using _ = trackUncaughtErrors((error, kind) => {
-      log(kind)
-      triggeredError = { error, kind }
-    })
-
-    const error = new Error('kaboom')
-
-    setTimeout(() => {
-      DANGEROUSLY_runPendingImmediatesAfterCurrentTask()
-      log('timeout 1')
-      setImmediate(() => {
-        log('timeout 1 -> immediate 1')
-        // uncaughtException
-        // queueMicrotask(() => {
-        //   log('timeout 1 -> immediate 1 -> microtask')
-        //   throw error
-        // })
-
-        // uncaughtException
-        // void (async () => {
-        //   await Promise.resolve()
-        //   throw error
-        // })
-
-        // unhandledRejection
-        // Promise.reject(error)
-
-        // unhandledRejection
-        void Promise.resolve().then(() => {
+    const unhandledRejectionCases: Case[] = [
+      {
+        name: 'Promise.resolve().then(...)',
+        immediate: (name, error, log) => {
+          log(name)
+          void Promise.resolve().then(() => {
+            log(`${name} :: erroring`)
+            throw error
+          })
+        },
+      },
+      {
+        name: 'throw in unawaited async IIFE',
+        immediate: (name, error, log) => {
+          log(name)
+          void (async () => {
+            await Promise.resolve()
+            log(`${name} :: erroring`)
+            throw error
+          })()
+        },
+      },
+      {
+        name: 'Promise.reject(...)',
+        immediate: (name, error, log) => {
+          log(name)
+          log(`${name} :: erroring`)
+          Promise.reject(error)
+        },
+      },
+      {
+        name: 'throw in async immediate',
+        immediate: async (name, error, log) => {
+          log(name)
+          await Promise.resolve()
+          log(`${name} :: erroring`)
           throw error
+        },
+      },
+    ]
+
+    it.each(unhandledRejectionCases)('$name', async ({ immediate }) => {
+      const { log, logs } = createLogger()
+      const done = createPromiseWithResolvers<void>()
+
+      const Ctx = new AsyncLocalStorage<string>()
+      const contextValue = 'hello'
+
+      let triggeredError: TriggeredUncaught | undefined = undefined
+      using _ = trackUncaughtErrors((error, kind) => {
+        // async context should be preserved
+        log(`${kind} - ${Ctx.getStore()}`)
+        triggeredError = { error, kind }
+      })
+
+      const error = new Error('kaboom')
+
+      Ctx.run(contextValue, () => {
+        setTimeout(() => {
+          DANGEROUSLY_runPendingImmediatesAfterCurrentTask()
+          log('timeout 1')
+          setImmediate(() => {
+            return immediate('timeout 1 -> immediate 1', error, log)
+          })
+          setImmediate(() => {
+            log('timeout 1 -> immediate 2')
+          })
         })
       })
-      setImmediate(() => {
-        log('timeout 1 -> immediate 2')
+
+      setTimeout(() => {
+        log('timeout 2')
+        // This ensures that we don't fall into this task in an invalid state.
+        try {
+          expectNoPendingImmediates()
+          done.resolve()
+        } catch (err) {
+          done.reject(err)
+        }
       })
+
+      await done.promise
+
+      expect(triggeredError).toEqual({ error, kind: 'unhandledRejection' })
+
+      expect(logs).toEqual([
+        // ===================================
+        'timeout 1',
+        // ======================
+        'timeout 1 -> immediate 1',
+        'timeout 1 -> immediate 1 :: erroring',
+
+        // FIXME: we would like to observe the rejection here...
+        // `unhandledRejection - ${contextValue}`,
+
+        // ======================
+        'timeout 1 -> immediate 2',
+
+        // FIXME: ...but it happens here, after the second immediate:
+        `unhandledRejection - ${contextValue}`,
+        // This is because unhandled rejections are only processed after the nextTick queue is empty:
+        // https://github.com/nodejs/node/blob/d546e7fd0bc3cbb4bcc2baae6f3aa44d2e81a413/lib/internal/process/task_queues.js#L104-L105
+        // and in our implementation, the second immediate is actually a nextTick.
+
+        // ===================================
+        'timeout 2',
+      ])
     })
-
-    setTimeout(() => {
-      log('timeout 2')
-      // This ensures that we don't fall into this task in an invalid state.
-      try {
-        expectNoPendingImmediates()
-        done.resolve()
-      } catch (err) {
-        done.reject(err)
-      }
-    })
-
-    await done.promise
-
-    expect(triggeredError).toEqual({ error, kind: 'unhandledRejection' })
-
-    expect(logs).toEqual([
-      // ===================================
-      'timeout 1',
-      // ======================
-      'timeout 1 -> immediate 1',
-
-      // // FIXME: we would like to observe the rejection here...
-      // 'unhandledRejection',
-
-      // ======================
-      'timeout 1 -> immediate 2',
-
-      // FIXME: ...but it happens here, after the second immediate:
-      'unhandledRejection',
-
-      // ===================================
-      'timeout 2',
-    ])
   })
 })
 
