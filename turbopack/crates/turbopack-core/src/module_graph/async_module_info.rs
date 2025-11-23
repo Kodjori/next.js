@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rustc_hash::FxHashSet;
-use turbo_tasks::{ResolvedVc, TryJoinIterExt, Vc};
+use turbo_tasks::{ResolvedVc, TryFlatJoinIterExt, Vc};
 
 use crate::{
     module::{Module, Modules},
@@ -57,17 +57,14 @@ async fn compute_async_module_info_single(
 
     let self_async_modules = graph
         .iter_nodes()
-        .map(async |node| Ok((node, *node.is_self_async().await?)))
-        .try_join()
-        .await?
-        .into_iter()
-        .flat_map(|(k, v)| v.then_some(k))
-        .chain(parent_async_modules.iter().copied())
-        .collect::<Vec<_>>();
+        .map(async |node| Ok(node.is_self_async().await?.then_some(node)))
+        .try_flat_join()
+        .await?;
 
     // To determine which modules are async, we need to propagate the self-async flag to all
     // importers, which is done using a reverse traversal over the graph
-    //
+    // Because we walks edges in the reverse direction we can trivially handle things like cycles
+    // without actually computing them.
     let mut async_modules = FxHashSet::default();
 
     let graph_ref = graph.read();
@@ -92,6 +89,9 @@ async fn compute_async_module_info_single(
         },
         |_, _, _| Ok(()),
     )?;
+
+    // Accumulate the parent modules at the end
+    async_modules.extend(parent_async_modules);
 
     Ok(Vc::cell(async_modules))
 }
