@@ -1,5 +1,4 @@
 use anyhow::Result;
-use petgraph::Graph;
 use rustc_hash::FxHashSet;
 use turbo_tasks::{ResolvedVc, TryJoinIterExt, Vc};
 
