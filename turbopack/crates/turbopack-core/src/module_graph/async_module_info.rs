@@ -56,8 +56,19 @@ async fn compute_async_module_info_single(
     let graph = graph.await?;
 
     let self_async_modules = graph
-        .iter_nodes()
-        .map(async |node| Ok(node.is_self_async().await?.then_some(node)))
+        .enumerate_nodes()
+        .map(async |(_, node)| {
+            Ok(match node {
+                super::SingleModuleGraphNode::Module(node) => {
+                    node.is_self_async().await?.then_some(*node)
+                }
+                super::SingleModuleGraphNode::VisitedModule { idx: _, module } => {
+                    // If a module is async in the parent then we need to mark reverse dependencies
+                    // async in this graph as well.
+                    parent_async_modules.contains(module).then_some(*module)
+                }
+            })
+        })
         .try_flat_join()
         .await?;
 
