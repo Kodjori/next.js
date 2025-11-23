@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use auto_hash_map::AutoSet;
 use petgraph::{
+    Direction,
     graph::{DiGraph, EdgeIndex, NodeIndex},
     visit::{EdgeRef, IntoNeighbors, IntoNodeReferences, NodeIndexable, Reversed},
 };
@@ -808,7 +809,7 @@ impl ModuleGraph {
         let async_modules_info = self.async_module_info().await?;
 
         let entry = graph_ref.get_entry(module)?;
-        let referenced_modules = iter_graphs_neighbors_rev(graphs, entry)
+        let referenced_modules = iter_graphs_neighbors_rev(graphs, entry, Direction::Outgoing)
             .filter(|(edge_idx, _)| {
                 let ty = graphs[entry.graph_idx()]
                     .graph
@@ -946,7 +947,7 @@ impl ModuleGraphRef {
                     {
                         let current = current_node.target_idx().unwrap_or(current);
                         stack.extend(
-                            iter_graphs_neighbors_rev(graphs, current)
+                            iter_graphs_neighbors_rev(graphs, current, Direction::Outgoing)
                                 .map(|(_, child)| (Pass::ExpandAndVisit, child)),
                         );
                     }
@@ -991,7 +992,7 @@ impl ModuleGraphRef {
             if visited.insert(node) {
                 let node_weight = self.get_node(node)?;
                 let graph = &graphs[node.graph_idx()].graph;
-                for (edge, succ) in iter_graphs_neighbors_rev(graphs, node) {
+                for (edge, succ) in iter_graphs_neighbors_rev(graphs, node, Direction::Outgoing) {
                     let succ_weight = self.get_node(succ)?;
                     let edge_weight = graph.edge_weight(edge).unwrap();
                     let action = visitor(
@@ -1044,7 +1045,7 @@ impl ModuleGraphRef {
             if visited.insert(node) {
                 let node_weight = self.get_node(node)?;
                 let graph = &graphs[node.graph_idx()].graph;
-                for (edge, succ) in iter_graphs_neighbors_rev(graphs, node) {
+                for (edge, succ) in iter_graphs_neighbors_rev(graphs, node, Direction::Outgoing) {
                     let succ_weight = self.get_node(succ)?;
                     let edge_weight = graph.edge_weight(edge).unwrap();
                     let action = visitor(
@@ -1113,6 +1114,70 @@ impl ModuleGraphRef {
         &self,
         entries: impl IntoIterator<Item = ResolvedVc<Box<dyn Module>>>,
         state: &mut S,
+        visit_preorder: impl FnMut(
+            Option<(ResolvedVc<Box<dyn Module>>, &'_ RefData)>,
+            ResolvedVc<Box<dyn Module>>,
+            &mut S,
+        ) -> Result<GraphTraversalAction>,
+        visit_postorder: impl FnMut(
+            Option<(ResolvedVc<Box<dyn Module>>, &'_ RefData)>,
+            ResolvedVc<Box<dyn Module>>,
+            &mut S,
+        ) -> Result<()>,
+    ) -> Result<()> {
+        self.traverse_edges_from_entries_dfs_impl::<S>(
+            entries,
+            state,
+            visit_preorder,
+            visit_postorder,
+            petgraph::Direction::Outgoing,
+        )
+    }
+
+    /// Traverses all reachable edges in dfs order over the reversed graph. The preorder visitor can
+    /// be used to forward state down the graph, and to skip subgraphs
+    ///
+    /// Target nodes can be revisited (once per incoming edge) in the preorder_visitor, in the post
+    /// order visitor they are visited exactly once with the first edge they were discovered with.
+    /// Edges are traversed in normal order, so should correspond to reference order.
+    ///
+    /// * `entries` - The entry modules to start the traversal from
+    /// * `state` - The state to be passed to the visitors
+    /// * `visit_preorder` - Called before visiting the children of a node.
+    ///    - Receives: (originating &SingleModuleGraphNode, edge &ChunkingType), target
+    ///      &SingleModuleGraphNode, state &S
+    ///    - Can return [GraphTraversalAction]s to control the traversal
+    /// * `visit_postorder` - Called after visiting the children of a node. Return
+    ///    - Receives: (originating &SingleModuleGraphNode, edge &ChunkingType), target
+    ///      &SingleModuleGraphNode, state &S
+    pub fn traverse_edges_from_entries_dfs_reversed<S>(
+        &self,
+        entries: impl IntoIterator<Item = ResolvedVc<Box<dyn Module>>>,
+        state: &mut S,
+        visit_preorder: impl FnMut(
+            Option<(ResolvedVc<Box<dyn Module>>, &'_ RefData)>,
+            ResolvedVc<Box<dyn Module>>,
+            &mut S,
+        ) -> Result<GraphTraversalAction>,
+        visit_postorder: impl FnMut(
+            Option<(ResolvedVc<Box<dyn Module>>, &'_ RefData)>,
+            ResolvedVc<Box<dyn Module>>,
+            &mut S,
+        ) -> Result<()>,
+    ) -> Result<()> {
+        self.traverse_edges_from_entries_dfs_impl::<S>(
+            entries,
+            state,
+            visit_preorder,
+            visit_postorder,
+            petgraph::Direction::Incoming,
+        )
+    }
+
+    fn traverse_edges_from_entries_dfs_impl<S>(
+        &self,
+        entries: impl IntoIterator<Item = ResolvedVc<Box<dyn Module>>>,
+        state: &mut S,
         mut visit_preorder: impl FnMut(
             Option<(ResolvedVc<Box<dyn Module>>, &'_ RefData)>,
             ResolvedVc<Box<dyn Module>>,
@@ -1123,6 +1188,7 @@ impl ModuleGraphRef {
             ResolvedVc<Box<dyn Module>>,
             &mut S,
         ) -> Result<()>,
+        direction: petgraph::Direction,
     ) -> Result<()> {
         let graphs = &self.graphs;
 
@@ -1166,7 +1232,7 @@ impl ModuleGraphRef {
                         && self.should_visit_node(current_node)
                     {
                         let current = current_node.target_idx().unwrap_or(current);
-                        stack.extend(iter_graphs_neighbors_rev(graphs, current).map(
+                        stack.extend(iter_graphs_neighbors_rev(graphs, current, direction).map(
                             |(edge, child)| (Pass::ExpandAndVisit, Some((current, edge)), child),
                         ));
                     }
@@ -1276,7 +1342,7 @@ impl ModuleGraphRef {
             visit_count += 1;
 
             let graph = &graphs[node.graph_idx()].graph;
-            for (edge, succ) in iter_graphs_neighbors_rev(graphs, node) {
+            for (edge, succ) in iter_graphs_neighbors_rev(graphs, node, Direction::Outgoing) {
                 let succ_weight = self.get_node(succ)?;
 
                 let edge_weight = graph.edge_weight(edge).unwrap();
@@ -1304,6 +1370,7 @@ impl ModuleGraphRef {
 fn iter_graphs_neighbors_rev(
     graphs: &[ReadRef<SingleModuleGraph>],
     node: GraphNodeIndex,
+    direction: petgraph::Direction,
 ) -> impl Iterator<Item = (EdgeIndex, GraphNodeIndex)> + '_ {
     let graph = &*graphs[node.graph_idx()].graph;
 
@@ -1314,7 +1381,7 @@ fn iter_graphs_neighbors_rev(
         }
     }
 
-    let mut walker = graph.neighbors(node.node_idx).detach();
+    let mut walker = graph.neighbors_directed(node.node_idx, direction).detach();
     std::iter::from_fn(move || {
         walker.next(graph).map(|(edge_idx, succ_idx)| {
             (
